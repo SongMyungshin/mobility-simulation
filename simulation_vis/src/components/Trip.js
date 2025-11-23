@@ -1,54 +1,53 @@
 /* global window */
-// Trip.js - 여행 경로(Trip)의 지도상 시각화 및 슬라이더 기반 애니메이션 제어 컴포넌트
+// Trip.js - 택시 이동 경로 + 승객 대기 상황 시각화 컴포넌트
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 
-import DeckGL from '@deck.gl/react';
-import { Map } from 'react-map-gl';
+import DeckGL from "@deck.gl/react";
+import { Map as ReactMap } from "react-map-gl";
 
-import { AmbientLight, PointLight, LightingEffect } from '@deck.gl/core';
-import { TripsLayer } from '@deck.gl/geo-layers';
-import { ScatterplotLayer, ArcLayer } from '@deck.gl/layers';
+import { AmbientLight, PointLight, LightingEffect } from "@deck.gl/core";
+import { TripsLayer } from "@deck.gl/geo-layers";
+import { ScatterplotLayer, ArcLayer } from "@deck.gl/layers";
 
 import Slider from "@mui/material/Slider";
 import "../css/trip.css";
 
-/* 
-  Light 효과 정의: 지도 위 객체들이 더 입체적으로 보이도록 조명 효과를 지정 
-*/
+/* ------------------------------------------------------------------
+ * 1. 조명 / 스타일 설정
+ * ------------------------------------------------------------------*/
+
+// 환경광
 const ambientLight = new AmbientLight({
-  color: [255, 255, 255],    // 환경광 색상
-  intensity: 1.0             // 밝기
+  color: [255, 255, 255],
+  intensity: 1.0,
 });
 
-// PointLight는 특정 위치에서 나오는 조명 효과
+// 포인트 라이트
 const pointLight = new PointLight({
   color: [255, 255, 255],
   intensity: 2.0,
-  position: [-74.05, 40.7, 8000] // 위도, 경도, 높이
+  position: [-74.05, 40.7, 8000],
 });
 
-// 위의 ambientLight와 pointLight를 합친 조명 효과
+// 두 조명을 합친 효과
 const lightingEffect = new LightingEffect({ ambientLight, pointLight });
 
-/*
-  material: 3D 객체 표면의 반사/질감 효과 정보
-*/
+// 재질 설정
 const material = {
   ambient: 0.1,
   diffuse: 0.6,
   shininess: 32,
-  specularColor: [60, 64, 70]
+  specularColor: [60, 64, 70],
 };
 
 const material2 = {
   ambient: 0.3,
   diffuse: 0.6,
   shininess: 32,
-  specularCol: [60, 64, 70]
+  specularCol: [60, 64, 70],
 };
 
-// theme 스타일 preset
 const DEFAULT_THEME = {
   buildingColor: [228, 228, 228],
   buildingColor2: [255, 255, 255],
@@ -56,39 +55,38 @@ const DEFAULT_THEME = {
   trailColor1: [23, 184, 190],
   material,
   material2,
-  effects: [lightingEffect]
+  effects: [lightingEffect],
 };
 
-// 초기 지도 뷰 설정 (위치, 확대, 시점 등)
-const INITIAL_VIEW_STATE = { 
-  longitude: 127.130622, // 경도 (포항공대 위치 등, 실제 환경에 맞게 수정)
-  latitude: 37.451748,   // 위도
-  zoom: 15,              // 지도 확대 레벨
-  pitch: 30,             // 시점 각도
-  bearing: 0             // 지도의 회전 각도
+// 초기 카메라 위치(성남 근처)
+const INITIAL_VIEW_STATE = {
+  longitude: 127.130622,
+  latitude: 37.451748,
+  zoom: 15,
+  pitch: 30,
+  bearing: 0,
 };
 
-const minTime = 0;
+// 시뮬레이션 시작 시각: 07:00
+const minTime = 7 * 60; // 420분
 const animationSpeed = 0.5;
 const mapStyle = "mapbox://styles/spear5306/ckzcz5m8w002814o2coz02sjc";
 
-// mapbox API 키 (개인 키를 입력해서 사용)
-const MAPBOX_TOKEN = `pk.eyJ1Ijoic2hlcnJ5MTAyNCIsImEiOiJjbG00dmtic3YwbGNoM2Zxb3V5NmhxZDZ6In0.ZBrAsHLwNihh7xqTify5hQ`;
+// Mapbox 토큰
+const MAPBOX_TOKEN =
+  "pk.eyJ1Ijoic2hlcnJ5MTAyNCIsImEiOiJjbG00dmtic3YwbGNoM2Zxb3V5NmhxZDZ6In0.ZBrAsHLwNihh7xqTify5hQ";
 
-/* 
-  애니메이션 시간 업데이트 함수: 한 틱(time step)씩 증가, 최대치 넘으면 다시 0으로 초기화
-*/
-// maxTime은 데이터에 따라 동적으로 계산 (컴포넌트 내부에서 계산)
+/* ------------------------------------------------------------------
+ * 2. 유틸 함수: 시간 포맷, 색상 매핑
+ * ------------------------------------------------------------------*/
 
-// 한 자리 숫자 시간(분/시) 앞에 0을 붙임 (시계 표기용)
+// 한 자리 숫자 앞에 0 붙이기
 const addZeroFill = (value) => {
   const valueString = value.toString();
   return valueString.length < 2 ? "0" + valueString : valueString;
 };
 
-/*
-  화면에 표시할 애니메이션 시간(시:분 포맷) 반환
-*/
+// 시:분 문자열로 변환
 const returnAnimationDisplayTime = (time) => {
   const hour = addZeroFill(parseInt((Math.round(time) / 60) % 24));
   const minute = addZeroFill(Math.round(time) % 60);
@@ -96,177 +94,309 @@ const returnAnimationDisplayTime = (time) => {
 };
 
 /*
-  선택한 시각(time)에 유효한 trip만 골라내는 함수 (미사용)
+  대기시간(분)에 따라 색상을 5구간으로 나눔 (흰색 → 진빨강)
 */
-const currData = (data, time) => {
-  const arr = [];
-  data.forEach((v) => {
-    const timestamp = v.timestamp;
-    const s_t = timestamp[0];
-    const e_t = timestamp[timestamp.length - 1];
-    if (s_t <= time && e_t >= time) {
-      arr.push(v);
-    }
-  });
-  return arr;
+const waitToColor = (wait) => {
+  const w = Math.max(0, wait || 0);
+
+  if (w < 15) {
+    return [255, 255, 255];
+  } else if (w < 30) {
+    return [255, 230, 230];
+  } else if (w < 45) {
+    return [255, 190, 190];
+  } else if (w < 60) {
+    return [255, 140, 140];
+  } else {
+    return [200, 0, 0];
+  }
 };
 
-/*
-  Trip 컴포넌트: 여행(trip) 경로 데이터를 받아, 지도 위에 시간에 따라 함선을 따라가는 듯한 애니메이션을 표시
-*/
+/* ------------------------------------------------------------------
+ * 3. 메인 컴포넌트
+ * ------------------------------------------------------------------*/
+
 const Trip = (props) => {
-  // time: 현재 트립 애니메이션의 시간(프레임)
-  const [time, setTime] = useState(minTime);
-  // animation: 애니메이션 frame id 저장용(해제시 사용)
-  const [animation] = useState({});
-  // trip 데이터 (경로, 시간 정보 포함)
   const trip = props.trip;
   const passengers = props.passengers || [];
 
-  // 데이터 기반 최대 시간 계산
-  const dataMaxFromTrips = React.useMemo(() => {
+  // 현재 시각 (분 단위)
+  const [time, setTime] = useState(minTime);
+  const [animation] = useState({});
+
+  /* ---------------- 데이터 기반 maxTime 계산 ---------------- */
+
+  const dataMaxFromTrips = useMemo(() => {
     if (!trip || trip.length === 0) return 0;
     let maxT = 0;
     for (const t of trip) {
       if (t && t.timestamp && t.timestamp.length) {
         const last = t.timestamp[t.timestamp.length - 1];
-        if (typeof last === 'number' && last > maxT) maxT = last;
+        if (typeof last === "number" && last > maxT) maxT = last;
       }
     }
     return maxT;
   }, [trip]);
 
-  const dataMaxFromPassengers = React.useMemo(() => {
+  const dataMaxFromPassengers = useMemo(() => {
     if (!passengers || passengers.length === 0) return 0;
     let maxT = 0;
     for (const p of passengers) {
       if (p && p.timestamp && p.timestamp.length) {
         const last = p.timestamp[p.timestamp.length - 1];
-        if (typeof last === 'number' && last > maxT) maxT = last;
+        if (typeof last === "number" && last > maxT) maxT = last;
       }
     }
     return maxT;
   }, [passengers]);
 
-  const maxTime = React.useMemo(() => {
-    const m = Math.max(60, dataMaxFromTrips, dataMaxFromPassengers);
-    return Number.isFinite(m) && m > 0 ? m : 60;
+  // 슬라이더 최대값: 최소 1시간, 데이터 마지막 하차 시각까지
+  const maxTime = useMemo(() => {
+    const candidate = Math.max(
+      minTime + 60,
+      dataMaxFromTrips,
+      dataMaxFromPassengers
+    );
+    return Number.isFinite(candidate) && candidate > minTime
+      ? candidate
+      : minTime + 60;
   }, [dataMaxFromTrips, dataMaxFromPassengers]);
 
-  // 시간 증가 함수 (데이터 최대 시간 기준으로 순환)
-  const returnAnimationTime = useCallback((t) => {
-    if (t > maxTime) {
-      return minTime;
-    }
-    return t + 0.01 * animationSpeed;
-  }, [maxTime]);
+  /* ---------------- 애니메이션 루프 ---------------- */
 
-  // 애니메이션 동작 함수: 시간이 0.01*speed 씩 증가하며, 애니메이션 갱신
+  const returnAnimationTime = useCallback(
+    (t) => {
+      if (t > maxTime) {
+        return minTime; // 다시 07:00으로
+      }
+      return t + 0.01 * animationSpeed;
+    },
+    [maxTime]
+  );
+
   const animate = useCallback(() => {
     setTime((time) => returnAnimationTime(time));
     animation.id = window.requestAnimationFrame(animate);
-  }, [animation]);
+  }, [animation, returnAnimationTime]);
 
-  // mount될 때 애니메이션 시작, unmount시 애니메이션 해제
   useEffect(() => {
     animation.id = window.requestAnimationFrame(animate);
     return () => window.cancelAnimationFrame(animation.id);
   }, [animation, animate]);
 
-  /**
-   * TripsLayer: 덱글에서 시간에 따라 경로(trip)의 움직임을 시각적으로 보여주는 레이어
-   * - id: 레이어 식별자
-   * - data: trip 객체 배열 (각 객체는 route(선 좌표 배열), timestamp(각 좌표의 시간), 등 필드 보유)
-   * - getPath: 각 trip 데이터에서 경로 추출 -> d.route는 위도/경도 좌표 배열
-   * - getTimestamps: 각 좌표별 시간 정보 배열 추출 -> d.timestamp
-   * - getColor: 트레일(이동 경로) 색상 지정 (예시: 노란색)
-   * - opacity: 불투명도
-   * - widthMinPixels: 선 폭(px 단위 최소값, 작은 값이면 너무 얇게 나와서 보기 어려움)
-   * - rounded, capRounded, jointRounded: 라인의 끝부분/꺾이는 부분을 둥글게 할지 여부
-   * - trailLength: 트레일 길이 (뒤에 잔상이 얼마만큼 남을지, 단위는 data timestamp 단위와 동일)
-   * - currentTime: 현재 애니메이션 시간 (이 값 이전까지의 경로만 표현됨)
-   * - shadowEnabled: 그림자 효과 적용 여부
-   */
-  // 현재 시간에 보일 승객만 필터링 (차량 도착 시점 이후에는 사라짐)
-  const visiblePassengers = React.useMemo(() => {
+  /* ------------------------------------------------------------------
+   * 4. 승객 정보 전처리
+   * ------------------------------------------------------------------*/
+
+  const passengerInfos = useMemo(() => {
     if (!passengers || passengers.length === 0) return [];
-    return passengers.filter((p) => Array.isArray(p.timestamp) && p.timestamp.length === 2 && p.timestamp[0] <= time && p.timestamp[1] > time);
-  }, [passengers, time]);
+
+    // passenger_id -> trip 매핑
+    const tripByPid = new Map();
+    if (trip && trip.length > 0) {
+      for (const t of trip) {
+        if (!t) continue;
+        const pid = t.passenger_id;
+        if (pid === undefined || pid === null) continue;
+        if (!tripByPid.has(pid)) tripByPid.set(pid, t);
+      }
+    }
+
+    const infos = [];
+
+    for (const p of passengers) {
+      if (!p) continue;
+
+      const pid = p.passenger_id;
+      const t = tripByPid.get(pid);
+
+      const hasTs = Array.isArray(p.timestamp) && p.timestamp.length >= 1;
+      const call = hasTs ? p.timestamp[0] : null;
+
+      // 픽업 좌표
+      let pickupLoc = null;
+      if (Array.isArray(p.loc) && p.loc.length > 0) {
+        pickupLoc = p.loc[0];
+      } else if (Array.isArray(p.location)) {
+        pickupLoc = p.location;
+      }
+
+      let pickupTime = null;
+
+      // TRIPS에서 픽업 시각 찾기
+      if (t && pickupLoc && Array.isArray(t.route) && Array.isArray(t.timestamp)) {
+        const [pxLon, pxLat] = pickupLoc;
+
+        for (let i = 0; i < t.route.length; i++) {
+          const pt = t.route[i];
+          if (!Array.isArray(pt) || pt.length < 2) continue;
+
+          if (pt[0] === pxLon && pt[1] === pxLat) {
+            const tsVal = t.timestamp[i];
+            if (typeof tsVal === "number") {
+              pickupTime = tsVal;
+            }
+            break;
+          }
+        }
+      }
+
+      // 없으면 wait_min으로 보완
+      if (
+        pickupTime == null &&
+        typeof call === "number" &&
+        typeof p.wait_min === "number"
+      ) {
+        pickupTime = call + p.wait_min;
+      }
+
+      // 그래도 없으면 call과 같다고 가정
+      if (pickupTime == null) pickupTime = call;
+
+      infos.push({
+        call,
+        pickupTime,
+        pickupLoc,
+      });
+    }
+
+    return infos;
+  }, [passengers, trip]);
+
+  // 현재 time에서 "아직 픽업 전"인 승객만 표시 + 대기시간 포함
+  const visiblePassengers = useMemo(() => {
+    const arr = [];
+    for (const info of passengerInfos) {
+      const { call, pickupTime, pickupLoc } = info;
+      if (
+        pickupLoc &&
+        typeof call === "number" &&
+        typeof pickupTime === "number" &&
+        time >= call &&
+        time <= pickupTime
+      ) {
+        const wait = pickupTime - call;
+        arr.push({
+          location: pickupLoc,
+          wait,
+        });
+      }
+    }
+    return arr;
+  }, [passengerInfos, time]);
+
+  /* ------------------------------------------------------------------
+   * 5. Deck.gl Layers
+   * ------------------------------------------------------------------*/
 
   const layers = [
-    new TripsLayer({  
-      id: 'trips',
+    // 택시 이동 경로 (노란 트레일)
+    new TripsLayer({
+      id: "trips",
       data: trip,
-      getPath: d => d.route,
-      getTimestamps: d => d.timestamp,
+      getPath: (d) => d.route,
+      getTimestamps: (d) => d.timestamp,
       getColor: [255, 255, 0],
       opacity: 1,
       widthMinPixels: 7,
       rounded: true,
-      capRounded : true,
-      jointRounded : true,
-      trailLength : 0.5,
+      capRounded: true,
+      jointRounded: true,
+      trailLength: 0.5,
       currentTime: time,
-      shadowEnabled: false
+      shadowEnabled: false,
     }),
-    // 승객: 흰색 포인트, 픽업 완료 시 사라짐
+
+    // 픽업 전 승객 위치: 대기시간에 따라 흰색 → 진빨강
     new ScatterplotLayer({
-      id: 'passengers',
+      id: "passengers",
       data: visiblePassengers,
-      getPosition: d => d.location,
-      getFillColor: [255, 255, 255],
+      getPosition: (d) => d.location,
+      getFillColor: (d) => waitToColor(d.wait),
       getRadius: 6,
-      radiusUnits: 'pixels',
+      radiusUnits: "pixels",
       pickable: true,
       updateTriggers: {
-        getPosition: [time]
-      }
+        getPosition: [time],
+        getFillColor: [time],
+      },
     }),
-    // 목적지: 주황색 포인트, 픽업 이후부터 도착까지 표시
+
+    // 목적지: 픽업 이후 ~ 하차 전까지 주황색 점
     new ScatterplotLayer({
-      id: 'destinations',
+      id: "destinations",
       data: (() => {
         if (!trip || trip.length === 0) return [];
         const arr = [];
         for (const t of trip) {
-          if (!t || !t.route || !t.timestamp || t.route.length < 2 || t.timestamp.length < 2) continue;
+          if (
+            !t ||
+            !t.route ||
+            !t.timestamp ||
+            t.route.length < 2 ||
+            t.timestamp.length < 2
+          )
+            continue;
           const drop = t.route[t.route.length - 1];
-          const start = t.timestamp.length > 1 ? t.timestamp[1] : t.timestamp[0];
+          const pickupTime = t.timestamp[1];
           const end = t.timestamp[t.timestamp.length - 1];
-          if (typeof start !== 'number' || typeof end !== 'number') continue;
-          if (time >= start && time <= end) {
-            arr.push({ location: drop });
-          }
+          if (
+            typeof pickupTime !== "number" ||
+            typeof end !== "number" ||
+            time < pickupTime ||
+            time > end
+          )
+            continue;
+          arr.push({ location: drop });
         }
         return arr;
       })(),
-      getPosition: d => d.location,
+      getPosition: (d) => d.location,
       getFillColor: [255, 165, 0],
       getRadius: 5,
-      radiusUnits: 'pixels',
+      radiusUnits: "pixels",
       pickable: false,
       updateTriggers: {
-        getPosition: [time]
-      }
+        getPosition: [time],
+      },
     }),
-    // 매칭된 차량-승객 링크: ArcLayer(흰색), 현재 차량 위치 → 픽업 지점까지(픽업 완료 시 사라짐)
+
+    // 배차 직후: 현재 차량 위치 → 픽업 지점까지 "분홍색" 아크 (빈차가 승객에게 가는 중)
     new ArcLayer({
-      id: 'match-arcs',
+      id: "match-arcs",
       data: (() => {
         if (!trip || trip.length === 0) return [];
         const arcs = [];
         for (const t of trip) {
-          if (!t || !t.route || !t.timestamp || t.route.length < 2 || t.timestamp.length < 2) continue;
+          if (
+            !t ||
+            !t.route ||
+            !t.timestamp ||
+            t.route.length < 2 ||
+            t.timestamp.length < 2
+          )
+            continue;
           const ts = t.timestamp;
           const rt = t.route;
           const start = ts[0];
           const pickupTime = ts[1];
-          if (typeof start !== 'number' || typeof pickupTime !== 'number') continue;
-          if (time < start || time > pickupTime) continue;
-          // 현재 차량 위치 보간: ts[k] <= time < ts[k+1]
+          if (
+            typeof start !== "number" ||
+            typeof pickupTime !== "number" ||
+            time < start ||
+            time > pickupTime
+          )
+            continue;
+
+          // 현재 차량 위치 보간
           let idx = 0;
           for (let k = 0; k < ts.length - 1; k++) {
-            if (typeof ts[k] === 'number' && typeof ts[k+1] === 'number' && ts[k] <= time && time < ts[k+1]) {
+            if (
+              typeof ts[k] === "number" &&
+              typeof ts[k + 1] === "number" &&
+              ts[k] <= time &&
+              time < ts[k + 1]
+            ) {
               idx = k;
               break;
             }
@@ -277,7 +407,7 @@ const Trip = (props) => {
           const t0 = ts[Math.max(0, Math.min(idx, ts.length - 1))];
           const t1 = ts[Math.max(0, Math.min(idx + 1, ts.length - 1))];
           let curr = a;
-          if (typeof t0 === 'number' && typeof t1 === 'number' && t1 > t0) {
+          if (typeof t0 === "number" && typeof t1 === "number" && t1 > t0) {
             const alpha = Math.max(0, Math.min(1, (time - t0) / (t1 - t0)));
             const x = a[0] + (b[0] - a[0]) * alpha;
             const y = a[1] + (b[1] - a[1]) * alpha;
@@ -290,36 +420,54 @@ const Trip = (props) => {
         }
         return arcs;
       })(),
-      getSourcePosition: d => d.source,
-      getTargetPosition: d => d.target,
-      getSourceColor: [255, 255, 255],
-      getTargetColor: [255, 255, 255],
+      getSourcePosition: (d) => d.source,
+      getTargetPosition: (d) => d.target,
+      // 분홍색
+      getSourceColor: [255, 105, 180],
+      getTargetColor: [255, 105, 180],
       getWidth: 3,
       pickable: false,
       updateTriggers: {
         getSourcePosition: [time],
-        getTargetPosition: [time]
-      }
+        getTargetPosition: [time],
+      },
     }),
-    // 승객 탑승 중: 현재 차량 위치 → 목적지까지 주황색 얇은 아크
+
+    // 탑승 중: 현재 차량 위치 → 목적지까지 "하늘색" 아크 (실제 이동 중)
     new ArcLayer({
-      id: 'occupied-arcs',
+      id: "occupied-arcs",
       data: (() => {
         if (!trip || trip.length === 0) return [];
         const arcs = [];
         for (const t of trip) {
-          if (!t || !t.route || !t.timestamp || t.route.length < 2 || t.timestamp.length < 2) continue;
+          if (
+            !t ||
+            !t.route ||
+            !t.timestamp ||
+            t.route.length < 2 ||
+            t.timestamp.length < 2
+          )
+            continue;
           const ts = t.timestamp;
           const rt = t.route;
           const pickupTime = ts[1];
           const dropTime = ts[ts.length - 1];
-          if (typeof pickupTime !== 'number' || typeof dropTime !== 'number') continue;
-          if (time < pickupTime || time > dropTime) continue;
+          if (
+            typeof pickupTime !== "number" ||
+            typeof dropTime !== "number" ||
+            time < pickupTime ||
+            time > dropTime
+          )
+            continue;
 
-          // 현재 위치 보간
           let idx = 0;
           for (let k = 0; k < ts.length - 1; k++) {
-            if (typeof ts[k] === 'number' && typeof ts[k+1] === 'number' && ts[k] <= time && time < ts[k+1]) {
+            if (
+              typeof ts[k] === "number" &&
+              typeof ts[k + 1] === "number" &&
+              ts[k] <= time &&
+              time < ts[k + 1]
+            ) {
               idx = k;
               break;
             }
@@ -330,7 +478,7 @@ const Trip = (props) => {
           const t0 = ts[Math.max(0, Math.min(idx, ts.length - 1))];
           const t1 = ts[Math.max(0, Math.min(idx + 1, ts.length - 1))];
           let curr = a;
-          if (typeof t0 === 'number' && typeof t1 === 'number' && t1 > t0) {
+          if (typeof t0 === "number" && typeof t1 === "number" && t1 > t0) {
             const alpha = Math.max(0, Math.min(1, (time - t0) / (t1 - t0)));
             const x = a[0] + (b[0] - a[0]) * alpha;
             const y = a[1] + (b[1] - a[1]) * alpha;
@@ -344,44 +492,46 @@ const Trip = (props) => {
         }
         return arcs;
       })(),
-      getSourcePosition: d => d.source,
-      getTargetPosition: d => d.target,
-      getSourceColor: [255, 165, 0],
-      getTargetColor: [255, 165, 0],
+      getSourcePosition: (d) => d.source,
+      getTargetPosition: (d) => d.target,
+      // 하늘색
+      getSourceColor: [0, 200, 255],
+      getTargetColor: [0, 200, 255],
       getWidth: 1.5,
       pickable: false,
       updateTriggers: {
         getSourcePosition: [time],
-        getTargetPosition: [time]
-      }
-    })
+        getTargetPosition: [time],
+      },
+    }),
   ];
-  
-  // 슬라이더로 시간 제어 시 호출되는 함수 (애니메이션 시간 수동 변경)
-  const SliderChange = (value) => {
-    const time = value.target.value;
-    setTime(time);
+
+  /* ------------------------------------------------------------------
+   * 6. 슬라이더 이벤트 / 렌더링
+   * ------------------------------------------------------------------*/
+
+  const SliderChange = (e) => {
+    const t = Number(e.target.value);
+    setTime(t);
   };
 
-  // 시:분 포맷(표시용) 얻기
   const [hour, minute] = returnAnimationDisplayTime(time);
 
-  // 실제 렌더링
   return (
     <div className="trip-container" style={{ position: "relative" }}>
-      {/* DeckGL: 지도와, trips 경로를 레이어로 올려 시각화 */}
       <DeckGL
         effects={DEFAULT_THEME.effects}
         initialViewState={INITIAL_VIEW_STATE}
         controller={true}
         layers={layers}
       >
-        {/*.react-map-gl의 Map: 실제 지도의 스타일 및 Mapbox 토큰 적용 */}
-        <Map mapStyle={mapStyle} mapboxAccessToken={MAPBOX_TOKEN} preventStyleDiffing={true}/>
+        <ReactMap
+          mapStyle={mapStyle}
+          mapboxAccessToken={MAPBOX_TOKEN}
+          preventStyleDiffing={true}
+        />
       </DeckGL>
-      {/* 현재 시간 표시 */}
       <h1 className="time">TIME : {`${hour} : ${minute}`}</h1>
-      {/* 시간 슬라이더: 사용자 조작으로 원하는 시간에 맞춰 볼 수 있음 */}
       <Slider
         id="slider"
         value={time}
