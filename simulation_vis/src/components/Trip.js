@@ -60,9 +60,9 @@ const DEFAULT_THEME = {
 
 // 초기 카메라 위치(성남 근처)
 const INITIAL_VIEW_STATE = {
-  longitude: 127.130622,
-  latitude: 37.451748,
-  zoom: 15,
+  longitude: 127.13,
+  latitude: 37.40,
+  zoom: 11.5,
   pitch: 30,
   bearing: 0,
 };
